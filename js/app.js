@@ -29,6 +29,8 @@ const $ = (s) => document.querySelector(s),
   fmtD = (n, d = 1) => (+n).toLocaleString("it-IT", { maximumFractionDigits: d, minimumFractionDigits: 0 }),
   cl = (v, a, b) => Math.max(a, Math.min(b, v)),
   dl = (k) => k.slice(8) + "/" + k.slice(5, 7);
+// numero che si anima contando da 0 (vedi animateView)
+const cu = (v, d = 0) => `<span class="cu" data-v="${v}" data-d="${d}">${fmtD(v, d)}</span>`;
 const lbl = (k) => {
   const d = pd(k);
   return GS[d.getDay()] + " " + d.getDate() + " " + MESI[d.getMonth()];
@@ -81,6 +83,7 @@ function render() {
   });
   $("#m").onclick = null;
   $("#m").innerHTML = tab === "home" ? home() : tab === "note" ? note() : tab === "graf" ? graf() : piano();
+  animateView();
   if (tab === "note") bindNote();
   if (tab === "graf") bindGraf();
 }
@@ -90,6 +93,392 @@ window.go = (k) => {
   render();
   scrollTo(0, 0);
 };
+
+/* ---------- animazioni (anime.js) ---------- */
+const AN = window.anime;
+const animOn = () => !!AN && S.p.anim !== false && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+function countUps(root, delay = 0) {
+  root.querySelectorAll(".cu").forEach((el, i) => {
+    const to = parseFloat(el.dataset.v), d = +el.dataset.d || 0, o = { v: 0 };
+    if (!isFinite(to)) return;
+    el.textContent = fmtD(0, d);
+    AN.animate(o, { v: to, duration: 1100, delay: delay + i * 40, ease: "outExpo", onUpdate: () => (el.textContent = fmtD(o.v, d)), onComplete: () => (el.textContent = fmtD(to, d)) });
+  });
+}
+function growBars(root, delay = 0) {
+  const g = root.querySelectorAll(".ba"), lab = root.querySelectorAll(".ch text:not(.ax)");
+  if (g.length) AN.animate(g, { scaleY: [0, 1], duration: 900, delay: AN.stagger(g.length > 20 ? 18 : 55, { start: delay }), ease: "outElastic(1, .75)" });
+  if (lab.length) AN.animate(lab, { opacity: [0, 1], duration: 400, delay: AN.stagger(30, { start: delay + 450 }) });
+}
+function drawLines(root, delay = 0) {
+  root.querySelectorAll(".ln-a").forEach((ln) => AN.animate(AN.svg.createDrawable(ln), { draw: ["0 0", "0 1"], duration: 1400, delay, ease: "inOutQuad" }));
+  const dots = root.querySelectorAll(".dot-a");
+  if (dots.length) AN.animate(dots, { scale: [0, 1], duration: 500, delay: AN.stagger(1300 / Math.max(1, dots.length), { start: delay + 100 }), ease: "outBack(2)" });
+}
+function fillBars(root, delay = 0) {
+  root.querySelectorAll(".bar i, .bbar i").forEach((el, i) => {
+    const w = el.style.width;
+    if (!w) return AN.animate(el, { opacity: [0, 1], duration: 500, delay: delay + 300 });
+    AN.animate(el, { width: ["0%", w], duration: 1100, delay: delay + i * 80, ease: "outExpo" });
+  });
+}
+function animateView() {
+  if (!animOn()) return;
+  const m = $("#m"), blocks = [...m.children];
+  AN.animate(blocks, { opacity: [0, 1], translateY: [22, 0], duration: 650, delay: AN.stagger(70), ease: "outCubic" });
+  // anello delle calorie che si riempie
+  m.querySelectorAll(".rp").forEach((c) => {
+    const L = parseFloat(c.dataset.l);
+    AN.animate(c, { strokeDasharray: [`0 314.16`, `${L} 314.16`], duration: 1400, delay: 200, ease: "outExpo" });
+  });
+  countUps(m, 150);
+  growBars(m, 250);
+  drawLines(m, 300);
+  fillBars(m, 250);
+  const fig = m.querySelector(".bfig img");
+  if (fig) AN.animate(fig, { opacity: [0, 1], scale: [0.85, 1], translateY: [14, 0], duration: 900, delay: 250, ease: "outBack(1.4)" });
+  const sq = m.querySelectorAll(".sq");
+  if (sq.length) AN.animate(sq, { opacity: [0, (el) => (el.classList.contains("on") ? 1 : 0.75)], translateY: [26, 0], duration: 700, delay: AN.stagger(90, { start: 500 }), ease: "outBack(1.2)" });
+  const mr = m.querySelectorAll(".oggi .mr");
+  if (mr.length) AN.animate(mr, { opacity: [0, 1], translateX: [-14, 0], duration: 500, delay: AN.stagger(60, { start: 250 }), ease: "outCubic" });
+}
+
+/* ---------- importa da Samsung Health ----------
+   Legge lo ZIP di "Scarica dati personali" (o i CSV sciolti): allenamenti e pesate (anche quelle della bilancia Feelfit). */
+// codici ufficiali Samsung Health → attività del diario
+const SH_T = {
+  1001: "Camminata", 1002: "Corsa", 11007: "Bici", 13001: "Trekking", 13004: "Bici", 14001: "Nuoto",
+  15001: "Altro cardio", 15002: "Palestra (pesi)", 15003: "Cyclette", 15004: "Altro cardio", 15005: "Tapis roulant", 15006: "Ellittica",
+  10001: "Stretching", 10007: "Circuito / funzionale", 10002: "Altro cardio", 0: "Altro cardio",
+};
+const shType = (c) => SH_T[c] ?? (c >= 10003 && c <= 10027 ? "Muscolare a corpo libero" : "Altro cardio");
+let SH = null; // dati letti dal file, in attesa di conferma
+function csvRows(txt) {
+  // CSV di Samsung: 1ª riga descrizione, 2ª intestazione; gestisce virgolette
+  const out = [];
+  let row = [], f = "", q = false;
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i];
+    if (q) {
+      if (ch === '"') { if (txt[i + 1] === '"') { f += '"'; i++; } else q = false; }
+      else f += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ",") { row.push(f); f = ""; }
+    else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && txt[i + 1] === "\n") i++;
+      row.push(f); f = ""; out.push(row); row = [];
+    } else f += ch;
+  }
+  if (f || row.length) { row.push(f); out.push(row); }
+  return out;
+}
+function csvObjects(txt) {
+  const R = csvRows(txt.replace(/^﻿/, ""));
+  if (R.length < 2) return [];
+  const H = R[1].map((h) => h.trim().replace(/^com\.samsung\.health\.(exercise|weight)\./, ""));
+  return R.slice(2).filter((r) => r.length > 3).map((r) => Object.fromEntries(H.map((h, i) => [h, r[i] ?? ""])));
+}
+// orario Samsung (UTC) + fuso della registrazione → giorno locale
+function shDay(st, off) {
+  const m = String(off || "").match(/UTC([+-])(\d\d)(\d\d)/), t = Date.parse(String(st).replace(" ", "T") + "Z");
+  if (isNaN(t)) return null;
+  const ms = m ? (m[1] === "-" ? -1 : 1) * (+m[2] * 60 + +m[3]) * 60000 : 0;
+  return new Date(t + ms).toISOString().slice(0, 10);
+}
+async function shRead(files) {
+  let ex = null, wt = null;
+  for (const f of files) {
+    if (/\.zip$/i.test(f.name)) {
+      const buf = new Uint8Array(await f.arrayBuffer());
+      const z = fflate.unzipSync(buf, { filter: (x) => /com\.samsung\.shealth\.exercise\.\d+\.csv$|com\.samsung\.health\.weight\.\d+\.csv$/.test(x.name) });
+      for (const [n, d] of Object.entries(z)) {
+        const t = fflate.strFromU8(d);
+        if (/exercise/.test(n)) ex = t;
+        else wt = t;
+      }
+    } else if (/exercise\.\d+\.csv$/i.test(f.name)) ex = await f.text();
+    else if (/weight\.\d+\.csv$/i.test(f.name)) wt = await f.text();
+  }
+  const A = (ex ? csvObjects(ex) : [])
+    .map((r) => {
+      const d = shDay(r.start_time, r.time_offset), min = num(r.duration) / 60000, km = num(r.distance) ? num(r.distance) / 1000 : 0;
+      return d && min >= 1 ? { d, id: r.datauuid, code: +r.exercise_type || 0, auto: num(r.source_type) !== 1, st: r.start_time, min: Math.round(min), km: Math.round(km * 100) / 100, kcal: Math.round(num(r.calorie) || 0), app: r.pkg_name } : null;
+    })
+    .filter(Boolean);
+  const W = (wt ? csvObjects(wt) : [])
+    .map((r) => ({ d: shDay(r.start_time, r.time_offset), t: r.start_time, peso: num(r.weight), gf: num(r.body_fat), h: num(r.height), app: r.pkg_name }))
+    .filter((r) => r.d && r.peso);
+  return { A, W };
+}
+// cosa verrebbe importato con le opzioni scelte
+function shPlan() {
+  const o = SH.o, A = SH.A.filter((a) => a.d >= o.from && a.d <= o.to && (!a.auto ? o.man : o.auto && a.min >= o.amin));
+  const have = new Set(Object.values(S.g).flatMap((d) => (Array.isArray(d.att) ? d.att.map((r) => r.id).filter(Boolean) : [])));
+  const byDay = {};
+  A.filter((a) => !have.has(a.id)).forEach((a) => (byDay[a.d] ??= []).push(a));
+  let skip = 0;
+  Object.keys(byDay).forEach((k) => {
+    const d = S.g[k] || {}, manual = d.allenamento && !(Array.isArray(d.att) && d.att.length);
+    if (manual && o.mode === "keep") { skip++; delete byDay[k]; }
+  });
+  // una pesata per giorno: la prima della giornata
+  const W = {};
+  if (o.w) SH.W.filter((w) => w.d >= o.from && w.d <= o.to).sort((a, b) => a.t.localeCompare(b.t)).forEach((w) => (W[w.d] ??= w));
+  const nA = Object.values(byDay).reduce((s, x) => s + x.length, 0);
+  return { byDay, W, nA, nD: Object.keys(byDay).length, skip, nW: Object.keys(W).length };
+}
+function shInfo() {
+  const P = shPlan();
+  return `Verranno aggiunti <b>${P.nA} allenamenti</b> in ${P.nD} giorni${P.skip ? ` (${P.skip} giorni saltati perché l’allenamento l’hai già scritto tu)` : ""} e <b>${P.nW} pesate</b>${P.nW ? " con grasso corporeo" : ""}.`;
+}
+function shHtml() {
+  const A = SH.A, W = SH.W, man = A.filter((a) => !a.auto).length, au = A.length - man, fw = W.filter((w) => /feelfit|qingniu/i.test(w.app)).length;
+  const o = SH.o;
+  return `<div class="sh-in" role="dialog" aria-modal="true" aria-labelledby="sh2-t">
+<div class="sh-hd"><h3 id="sh2-t">Importa da Samsung Health</h3><button class="x" id="sh2x" aria-label="Chiudi"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></div>
+<p class="mu">Nel file: <b>${A.length} allenamenti</b> (${man} avviati da te, ${au} rilevati in automatico) e <b>${W.length} pesate</b>${fw ? `, di cui ${fw} dalla bilancia Feelfit` : ""}.</p>
+<div class="lb">Da quando importare</div>
+<p class="mu" style="margin-top:0">Tutto quello che nel file è precedente a questa data viene ignorato, così i giorni che hai scritto a mano non vengono mai toccati.</p>
+<label for="sh_a">Ignora i dati prima del</label><input type="date" id="sh_a" value="${o.from}">
+<div class="lb">Allenamenti</div>
+<label class="sw"><input type="checkbox" id="sh_m"${o.man ? " checked" : ""}><span>Quelli avviati da te (corsa, palestra, trekking…)</span></label>
+<label class="sw"><input type="checkbox" id="sh_au"${o.auto ? " checked" : ""}><span>Anche camminate e giri in bici rilevati in automatico</span></label>
+<label for="sh_am">…solo se durano almeno (minuti)</label><input id="sh_am" inputmode="numeric" value="${o.amin}">
+<label for="sh_md">Nei giorni dove l’allenamento l’hai già scritto a mano</label>
+<select id="sh_md"><option value="keep"${o.mode === "keep" ? " selected" : ""}>Lascia il mio, non importare</option><option value="add"${o.mode === "add" ? " selected" : ""}>Aggiungi quelli di Samsung al mio</option></select>
+<div class="lb">Peso e composizione</div>
+<label class="sw"><input type="checkbox" id="sh_w"${o.w ? " checked" : ""}><span>Pesate con grasso corporeo (diventano misurazioni del corpo)</span></label>
+<label class="sw"><input type="checkbox" id="sh_wd"${o.wd ? " checked" : ""}><span>Scrivi il peso nei giorni del diario che non ce l’hanno</span></label>
+<p class="mu" id="sh_i" role="status">${shInfo()}</p>
+<button class="b" id="sh_go">Importa</button> <span class="mu" id="sh_o" role="status"></span>
+<p class="mu">Puoi ripetere l’importazione quando vuoi: gli allenamenti già importati non vengono duplicati.</p>
+<button class="lnk dz" id="sh_un">Rimuovi tutto quello che è stato importato da Samsung Health</button></div>`;
+}
+window.openSH = async (files) => {
+  const o = $("#shs");
+  o.innerHTML = `<div class="sh-in"><p>Sto leggendo il file di Samsung Health…</p></div>`;
+  o.hidden = false;
+  document.body.style.overflow = "hidden";
+  try {
+    const r = await shRead(files);
+    if (!r.A.length && !r.W.length) throw new Error("vuoto");
+    const ks = Object.keys(S.g).sort();
+    if (!S.p.shDa) { S.p.shDa = dk(new Date()); saveP(); }
+    SH = { ...r, o: { from: S.p.shDa, to: "9999-12-31", man: true, auto: false, amin: 20, mode: "keep", w: true, wd: true } };
+  } catch (e) {
+    o.innerHTML = `<div class="sh-in"><div class="sh-hd"><h3>Importa da Samsung Health</h3><button class="x" id="sh2x" aria-label="Chiudi">✕</button></div><p>Non trovo allenamenti o pesate in questo file. Scegli lo ZIP di “Scarica dati personali” di Samsung Health, oppure i file che contengono “exercise” e “weight”.</p></div>`;
+    $("#sh2x").onclick = () => { o.hidden = true; document.body.style.overflow = ""; };
+    return;
+  }
+  o.innerHTML = shHtml();
+  const close = () => { o.hidden = true; document.body.style.overflow = ""; };
+  $("#sh2x").onclick = close;
+  o.onclick = (e) => { if (e.target === o) close(); };
+  const upd = () => {
+    const x = SH.o;
+    if ($("#sh_a").value && $("#sh_a").value !== x.from) { x.from = $("#sh_a").value; S.p.shDa = x.from; saveP(); }
+    x.man = $("#sh_m").checked; x.auto = $("#sh_au").checked; x.amin = num($("#sh_am").value) || 0;
+    x.mode = $("#sh_md").value; x.w = $("#sh_w").checked; x.wd = $("#sh_wd").checked;
+    $("#sh_i").innerHTML = shInfo();
+    $("#sh_o").textContent = "";
+  };
+  o.querySelectorAll("input,select").forEach((el) => (el.onchange = el.oninput = upd));
+  $("#sh_un").onclick = async () => {
+    if (!confirm("Togliere dal diario gli allenamenti, le misurazioni e i pesi importati da Samsung Health? Quelli scritti a mano restano.")) return;
+    let n = 0;
+    for (const [k, d0] of Object.entries(S.g)) {
+      const d = { ...d0 };
+      if (Array.isArray(d.att) && d.att.some((r) => r.src === "sh")) {
+        d.att = d.att.filter((r) => r.src !== "sh");
+        n++;
+        const note = d.alln || "";
+        d.allenamento = [d.att.map(trText).join(" + "), note].filter(Boolean).join("; ");
+        if (!d.att.length) { delete d.att; delete d.alln; }
+        if (!d.allenamento) delete d.allenamento;
+      }
+      if (d.pesoSrc === "sh") { delete d.peso; delete d.pesoSrc; }
+      if (Object.keys(d).length) S.g[k] = d; else delete S.g[k];
+    }
+    S.p.storia = (S.p.storia || []).filter((x) => x.src !== "sh");
+    await saveMonths(); await saveP();
+    BC.i = null; render();
+    $("#sh_o").textContent = `Rimosso: allenamenti importati da ${n} giorni e le misurazioni di Samsung.`;
+    $("#sh_i").innerHTML = shInfo();
+  };
+  $("#sh_go").onclick = async () => {
+    upd();
+    const P = shPlan(), ms = new Set();
+    for (const [k, list] of Object.entries(P.byDay)) {
+      const d = { ...(S.g[k] || {}) }, old = Array.isArray(d.att) ? d.att : [], manual = d.allenamento && !old.length;
+      const rows = list.sort((a, b) => a.st.localeCompare(b.st)).map((a) => ({ t: shType(a.code), min: a.min, ...(a.km ? { km: a.km } : {}), ...(a.kcal ? { kcal: a.kcal } : {}), id: a.id, src: "sh" }));
+      let note = old.length ? d.alln || "" : "";
+      if (manual && SH.o.mode === "add") note = d.allenamento;
+      d.att = [...(manual && SH.o.mode === "replace" ? [] : old), ...rows];
+      if (note) d.alln = note; else delete d.alln;
+      d.allenamento = [d.att.map(trText).join(" + "), note].filter(Boolean).join("; ");
+      S.g[k] = d;
+      ms.add(k.slice(0, 7));
+    }
+    let nW = 0;
+    if (SH.o.w) {
+      const H = (S.p.storia = Array.isArray(S.p.storia) ? S.p.storia : []);
+      for (const [k, w] of Object.entries(P.W)) {
+        if (w.gf) {
+          // la vecchia misurazione senza data coincide con una pesata di Samsung? la sostituisce
+          const und = H.findIndex((x) => !x.d && num(x.peso) === w.peso && num(x.grasso) === w.gf);
+          if (und >= 0) H.splice(und, 1);
+          const e = { d: k, peso: String(w.peso), grasso: String(w.gf), lean: "", src: "sh" }, i = H.findIndex((x) => x.d === k);
+          if (i >= 0) { if (H[i].src === "sh") H[i] = e; } else H.push(e);
+          nW++;
+        }
+        if (SH.o.wd && !(S.g[k] && S.g[k].peso)) { S.g[k] = { ...(S.g[k] || {}), peso: String(w.peso), pesoSrc: "sh" }; ms.add(k.slice(0, 7)); }
+      }
+      // profilo: ultima misurazione e altezza
+      const last = hist().slice(-1)[0];
+      if (last && last.d) { S.p.peso = last.peso; S.p.grasso = last.grasso; }
+      const hh = SH.W.map((w) => w.h).filter(Boolean).slice(-1)[0];
+      if (hh && !num(S.p.altezza)) S.p.altezza = String(hh);
+    }
+    await saveMonths([...ms]);
+    await saveP();
+    BC.i = null; TR.ref = null; HW.ref = null;
+    $("#sh_o").textContent = `Fatto: ${P.nA} allenamenti in ${P.nD} giorni e ${nW} misurazioni del corpo importati.`;
+    $("#sh_i").innerHTML = shInfo();
+    render();
+  };
+};
+
+const OCR_SRC = { lib: "ocr/tesseract.min.js", worker: "ocr/worker.min.js", core: "ocr/", lang: "ocr/" };
+/* ---------- lettura della schermata di Feelfit (OCR nel browser) ---------- */
+const OCR = OCR_SRC; // percorsi della libreria di riconoscimento del testo
+// [chiave, etichetta nella schermata, nome nel diario, unità, min, max, decimali]
+const FFL = [
+  ["peso", /^peso$/i, "Peso", "kg", 30, 250, 1],
+  ["grasso", /grasso\s+corp/i, "Grasso corporeo", "%", 3, 60, 1],
+  ["bmi", /^bmi$/i, "BMI", "", 10, 70, 1],
+  ["scheletrico", /muscolo\s+schel/i, "Muscolo scheletrico", "%", 15, 70, 1],
+  ["lean", /massa\s+musc/i, "Massa muscolare", "kg", 15, 130, 1],
+  ["proteine", /proteine/i, "Proteine", "%", 5, 30, 1],
+  ["bmr", /^bmr/i, "Metabolismo basale", "kcal", 800, 4000, 0],
+  ["viscerale", /grasso\s+addom/i, "Grasso addominale", "", 1, 40, 0],
+  ["acqua", /idrata/i, "Idratazione", "%", 30, 80, 1],
+  ["ossa", /massa\s+ossea/i, "Massa ossea", "kg", 1, 8, 2],
+  ["eta", /et.\s*metab/i, "Età metabolica", "anni", 10, 100, 0],
+];
+let FF = null;
+function loadScript(src) {
+  return new Promise((ok, ko) => {
+    if (window.Tesseract) return ok();
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = ok;
+    s.onerror = () => ko(new Error("non riesco a caricare il lettore (serve internet la prima volta)"));
+    document.head.appendChild(s);
+  });
+}
+const ffNum = (s) => {
+  const m = String(s || "").replace(/\s/g, "").match(/\d+(?:[.,]\d+)?/);
+  return m ? parseFloat(m[0].replace(",", ".")) : null;
+};
+async function ffRead(file, say) {
+  say("Preparo il lettore…");
+  await loadScript(OCR.lib);
+  const w = await Tesseract.createWorker("ita", 1, { workerPath: OCR.worker, corePath: OCR.core, langPath: OCR.lang, gzip: true });
+  try {
+    say("Leggo la schermata…");
+    const r = await w.recognize(file, {}, { blocks: true });
+    const lines = r.data.blocks.flatMap((b) => b.paragraphs.flatMap((p) => p.lines));
+    const W = r.data.blocks.reduce((m, b) => Math.max(m, b.bbox.x1), 0);
+    const dm = r.data.text.match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](20\d\d)/);
+    const out = { d: dm ? `${dm[3]}-${p2(dm[2])}-${p2(dm[1])}` : "", v: {}, raw: {} };
+    // seconda lettura mirata: il numero sta subito sopra la sua etichetta
+    await w.setParameters({ tessedit_char_whitelist: "0123456789.,%kgcal", tessedit_pageseg_mode: "7" });
+    for (const [k, rx, , , lo, hi] of FFL) {
+      const i = lines.findIndex((l) => rx.test(l.text.trim()));
+      if (i < 0) continue;
+      const lb = lines[i].bbox, h = Math.max(12, lb.y1 - lb.y0);
+      const rect = { left: Math.max(0, lb.x0 - 6), top: Math.max(0, lb.y0 - Math.round(h * 3.4)), width: Math.round(W * 0.33), height: Math.round(h * 3) };
+      const v = await w.recognize(file, { rectangle: rect });
+      let n = ffNum(v.data.text);
+      // se la lettura mirata non convince, provo con la riga sopra della prima lettura
+      if (n == null || n < lo || n > hi) {
+        const prev = lines.slice(Math.max(0, i - 3), i).reverse().map((l) => ffNum(l.text)).find((x) => x != null && x >= lo && x <= hi);
+        n = prev ?? n;
+      }
+      out.raw[k] = v.data.text.trim();
+      if (n != null) out.v[k] = n;
+    }
+    return out;
+  } finally {
+    await w.terminate();
+  }
+}
+function ffForm() {
+  const v = FF.v, h = (num(S.p.altezza) || 175) / 100, ex = hist().find((x) => x.d === FF.d);
+  const warn = [];
+  FFL.forEach(([k, , n, , lo, hi]) => {
+    if (v[k] == null) warn.push(`${n}: non letto`);
+    else if (v[k] < lo || v[k] > hi) warn.push(`${n}: ${fmtD(v[k], 2)} sembra strano`);
+  });
+  if (v.peso && v.bmi && Math.abs(v.peso / h / h - v.bmi) > 1.2 && num(S.p.altezza)) warn.push("Il BMI non torna con peso e altezza: controlla il peso");
+  return `<div class="sh-in" role="dialog" aria-modal="true" aria-labelledby="ff-t">
+<div class="sh-hd"><h3 id="ff-t">Schermata Feelfit</h3><button class="x" id="ffx" aria-label="Chiudi"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></div>
+<div class="ffw"><img src="${FF.url}" alt="La schermata caricata"><div><p class="mu" style="margin-top:0">Controlla i valori letti: puoi correggerli prima di salvare.</p>
+<label for="ff_d">Data della misurazione</label><input type="date" id="ff_d" value="${FF.d}"></div></div>
+${warn.length ? `<p class="ffwarn">${warn.map(esc).join("<br>")}</p>` : `<p class="ffok">Tutti i valori sono stati letti.</p>`}
+<div class="g2">${FFL.map(([k, , n, u]) => `<div><label for="ff_${k}">${n}${u ? ` (${u})` : ""}</label><input id="ff_${k}" inputmode="decimal" value="${v[k] != null ? String(v[k]).replace(".", ",") : ""}"></div>`).join("")}</div>
+${ex && ex.src !== "feelfit" ? `<p class="ffwarn">Per il ${lbl(FF.d)} c’è già una misurazione inserita a mano: salvando la sostituisci.</p>` : ""}
+<button class="b" id="ff_s">${ex && ex.src !== "feelfit" ? "Sostituisci la misurazione" : "Salva misurazione"}</button> <span class="mu" id="ff_o" role="status"></span></div>`;
+}
+window.openFF = async (file) => {
+  const o = $("#ffs");
+  o.innerHTML = `<div class="sh-in"><div class="sh-hd"><h3>Schermata Feelfit</h3><button class="x" id="ffx" aria-label="Chiudi">✕</button></div><p id="ff_p" role="status">Preparo il lettore…</p></div>`;
+  o.hidden = false;
+  document.body.style.overflow = "hidden";
+  const close = () => { o.hidden = true; document.body.style.overflow = ""; if (FF && FF.url) URL.revokeObjectURL(FF.url); };
+  $("#ffx").onclick = close;
+  try {
+    const r = await ffRead(file, (t) => $("#ff_p") && ($("#ff_p").textContent = t));
+    FF = { ...r, url: URL.createObjectURL(file) };
+  } catch (e) {
+    $("#ff_p").textContent = "Non sono riuscito a leggere la schermata: " + e.message + ".";
+    return;
+  }
+  o.innerHTML = ffForm();
+  $("#ffx").onclick = close;
+  o.onclick = (e) => { if (e.target === o) close(); };
+  $("#ff_d").onchange = (e) => { FF.d = e.target.value; o.innerHTML = ffForm(); openFFbind(close); };
+  openFFbind(close);
+};
+function openFFbind(close) {
+  $("#ffx").onclick = close;
+  $("#ff_d").onchange = (e) => { FFL.forEach(([k]) => (FF.v[k] = num($("#ff_" + k).value) ?? undefined)); FF.d = e.target.value; $("#ffs").innerHTML = ffForm(); openFFbind(close); };
+  $("#ff_s").onclick = async () => {
+    const d = $("#ff_d").value;
+    if (!d) return ($("#ff_o").textContent = "Manca la data");
+    const v = Object.fromEntries(FFL.map(([k]) => [k, num($("#ff_" + k).value)]));
+    if (!v.peso || !v.grasso) return ($("#ff_o").textContent = "Servono almeno peso e grasso corporeo");
+    const e = { d, src: "feelfit", ...Object.fromEntries(Object.entries(v).filter(([, x]) => x != null).map(([k, x]) => [k, String(x)])) };
+    const H = (S.p.storia = Array.isArray(S.p.storia) ? S.p.storia : []), i = H.findIndex((x) => x.d === d);
+    const und = H.findIndex((x) => !x.d && num(x.peso) === v.peso && num(x.grasso) === v.grasso);
+    if (und >= 0) H.splice(und, 1);
+    const j = H.findIndex((x) => x.d === d);
+    if (j >= 0) H[j] = e; else H.push(e);
+    // profilo e diario: ultima misurazione; il peso del giorno solo se manca
+    const last = hist().slice(-1)[0];
+    if (last && last.d === d) {
+      S.p.peso = e.peso; S.p.grasso = e.grasso;
+      if (e.lean) S.p.lean = e.lean;
+      if (e.bmr) S.p.bmr = e.bmr;
+    }
+    if (!(S.g[d] && S.g[d].peso)) S.g[d] = { ...(S.g[d] || {}), peso: e.peso };
+    await saveMonths([d.slice(0, 7)]);
+    await saveP();
+    BC.i = null;
+    render();
+    $("#ff_o").textContent = "Misurazione salvata.";
+  };
+}
 
 /* ---------- impostazioni / temi ---------- */
 const GEAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>';
@@ -121,7 +510,12 @@ function setHtml() {
       return `<button class="pl${k === TH.p ? " on" : ""}" data-pl="${k}" aria-pressed="${k === TH.p}"><span class="dots">${[v.bg, v.cd, v.ac, v.ac2].map((c) => `<i style="background:${c}"></i>`).join("")}</span><span>${P.n}${P.dark ? " · scuro" : ""}</span></button>`;
     })
     .join("")}</div>
-${EX.sfondi?.length ? `<label class="sw"><input type="checkbox" id="fto"${TH.foto ? " checked" : ""}><span>Foto di sfondo dietro le schede</span></label>` : ""}</div>`;
+${EX.sfondi?.length ? `<label class="sw"><input type="checkbox" id="fto"${TH.foto ? " checked" : ""}><span>Foto di sfondo dietro le schede</span></label>` : ""}
+<div class="lb">Collegamenti</div>
+<div class="dbt"><button class="b g" id="shb">Importa da Samsung Health</button><button class="b g" id="ffb">Leggi schermata Feelfit</button></div><input type="file" id="shf" accept=".zip,.csv,application/zip,text/csv" multiple hidden><input type="file" id="fff" accept="image/*" hidden>
+<p class="mu" style="margin-top:6px">Samsung Health: Impostazioni → Scarica dati personali, poi scegli qui lo ZIP. Feelfit: condividi la schermata della misurazione come immagine e sceglila qui; il lettore compila tutti i valori, anche massa ossea ed età metabolica.</p>
+<label class="sw"><input type="checkbox" id="anm"${S.p.anim !== false ? " checked" : ""}><span>Animazioni</span></label>
+<p class="mu">La scelta viene salvata su questo dispositivo e nel tuo profilo.</p></div>`;
 }
 function applyBg() {
   const r = document.documentElement, b = EX.sfondi || [];
@@ -134,8 +528,10 @@ window.openSet = openSet;
 function openSet() {
   const o = $("#set");
   o.innerHTML = setHtml();
+  const first = o.hidden;
   o.hidden = false;
   document.body.style.overflow = "hidden";
+  if (first && animOn()) AN.animate(o.querySelectorAll(".th, .pl"), { opacity: [0, 1], scale: [0.92, 1], duration: 450, delay: AN.stagger(35, { start: 120 }), ease: "outBack(1.5)" });
   const close = () => {
     o.hidden = true;
     document.body.style.overflow = "";
@@ -169,6 +565,27 @@ function openSet() {
         });
       }),
   );
+  $("#anm").onchange = (e) => {
+    S.p.anim = e.target.checked;
+    saveP();
+    render();
+  };
+  $("#shb").onclick = () => $("#shf").click();
+  $("#ffb").onclick = () => $("#fff").click();
+  $("#fff").onchange = (e) => {
+    const f = e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    $("#set").hidden = true;
+    openFF(f);
+  };
+  $("#shf").onchange = (e) => {
+    const f = [...e.target.files];
+    e.target.value = "";
+    if (!f.length) return;
+    $("#set").hidden = true;
+    openSH(f);
+  };
   if ($("#fto"))
     $("#fto").onchange = (e) => {
       TH.foto = e.target.checked;
@@ -234,6 +651,8 @@ $("#gear").onclick = openSet;
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("#set").hidden) $("#shx").click();
   if (e.key === "Escape" && !$("#pdfs").hidden) $("#pxx").click();
+  if (e.key === "Escape" && !$("#shs").hidden && $("#sh2x")) $("#sh2x").click();
+  if (e.key === "Escape" && !$("#ffs").hidden && $("#ffx")) $("#ffx").click();
 });
 
 /* ---------- stima calorie ----------
@@ -411,7 +830,7 @@ function wkKey(k) {
 }
 // minuti di allenamento divisi in cardio e muscolare.
 // Ogni pezzo separato da "+" o ";" prende il tipo dalle sue parole; se non ne ha, quello dell'intera frase.
-const RX_MUS = /muscolar|pesi|forza|palestra|panca|squat|addominal|funzional|crossfit|calisthenic|circuito|corpo libero|trx|kettlebell|pilates|yoga/i;
+const RX_MUS = /muscolar|stretching|pesi|forza|palestra|panca|squat|addominal|funzional|crossfit|calisthenic|circuito|corpo libero|trx|kettlebell|pilates|yoga/i;
 const RX_CAR = /corsa|\brun|bici|cyclette|spinning|ellittica|tapis|camminat|passeggiat|nuoto|nuotat|vogatore|cardio|trekking|escursion|bikepark|sci\b|salto|corda|hiit|calcio|tennis|padel|basket/i;
 function trainStats(s) {
   const t = String(s || "");
@@ -438,9 +857,10 @@ function stackBars(D, R, o) {
   const { H, top, mx, X, bw, lab } = o, Y = (v) => top + H - (v / mx) * H;
   return D.map((k, i) => {
     const r = R[i], x = X(i), hc = (r.c / mx) * H, hm = (r.m / mx) * H, rr = Math.min(5, bw / 3);
-    let s = "";
+    let s = `<g class="ba" style="transform-origin:0 ${top + H}px">`;
     if (hc) s += `<rect x="${x.toFixed(1)}" y="${(top + H - hc).toFixed(1)}" width="${bw.toFixed(1)}" height="${hc.toFixed(1)}" rx="${hm ? 0 : rr}" style="fill:var(--tc)"/>`;
     if (hm) s += `<rect x="${x.toFixed(1)}" y="${(top + H - hc - hm).toFixed(1)}" width="${bw.toFixed(1)}" height="${hm.toFixed(1)}" rx="${hc ? 0 : rr}" style="fill:var(--tm)"/>`;
+    s += "</g>";
     if (lab && r.mn) s += `<text x="${(x + bw / 2).toFixed(1)}" y="${(Y(r.mn) - 4).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="700">${Math.round(r.mn)}′</text>`;
     return s;
   }).join("");
@@ -466,7 +886,7 @@ function weekHome(td) {
     base = D.map((k, i) => (R[i].mn ? "" : `<rect x="${8 + i * 47}" y="${top + H - 4}" width="36" height="4" rx="2" style="fill:var(--tr)"/>`)).join(""),
     days = D.map((k, i) => `<text x="${8 + i * 47 + 18}" y="${top + H + 15}" text-anchor="middle" class="ax"${k === td ? ' style="fill:var(--tx);font-weight:700"' : ""}>${GS[pd(k).getDay()].slice(0, 3)}</text>`).join("");
   const pc = Math.min(1, tc / 150);
-  return `<section class="c wkh"><div class="wkh-h"><h3>Allenamento ${cur ? "di questa settimana" : "della settimana"}</h3><span class="wkt"><b>${Math.round(tc + tmu)}′</b> totali</span></div>${navB(wlab(wkKey(ref)), "hwS")}${trLeg(tc, tmu)}${svg(340, H + top + 24, base + bars + days, "Minuti di allenamento per giorno, cardio e muscolare")}<div class="goal"><div class="gl"><span>Cardio verso i 150′ consigliati</span><b>${Math.round(tc)}′ / 150′</b></div><div class="bar on"><i style="width:${(pc * 100).toFixed(0)}%;background:var(--tc)"></i></div><div class="gl"><span>Sedute</span><b>${sess}</b></div>${R.some((r) => r.kc) ? `<div class="gl"><span>Kcal bruciate (dove le hai segnate)</span><b>${fmt(R.reduce((a, r) => a + r.kc, 0))}</b></div>` : ""}</div></section>`;
+  return `<section class="c wkh"><div class="wkh-h"><h3>Allenamento ${cur ? "di questa settimana" : "della settimana"}</h3><span class="wkt"><b>${cu(Math.round(tc + tmu))}′</b> totali</span></div>${navB(wlab(wkKey(ref)), "hwS")}${trLeg(tc, tmu)}${svg(340, H + top + 24, base + bars + days, "Minuti di allenamento per giorno, cardio e muscolare")}<div class="goal"><div class="gl"><span>Cardio verso i 150′ consigliati</span><b>${cu(Math.round(tc))}′ / 150′</b></div><div class="bar on"><i style="width:${(pc * 100).toFixed(0)}%;background:var(--tc)"></i></div><div class="gl"><span>Sedute</span><b>${sess}</b></div>${R.some((r) => r.kc) ? `<div class="gl"><span>Kcal bruciate (dove le hai segnate)</span><b>${fmt(R.reduce((a, r) => a + r.kc, 0))}</b></div>` : ""}</div></section>`;
 }
 
 // grafici: dettaglio settimana / mese
@@ -496,7 +916,7 @@ function trainC() {
   const lab = D.map((k, i) => (mese ? (i % 5 === 0 ? `<text x="${(14 + i * gap).toFixed(1)}" y="${top + H + 15}" class="ax">${i + 1}</text>` : "") : `<text x="${14 + i * gap + 17}" y="${top + H + 15}" text-anchor="middle" class="ax">${GS[pd(k).getDay()].slice(0, 3)}</text>`)).join("");
   return `<div class="c"><h3>Allenamenti per giorno</h3><div class="tg"><button class="b ${mese ? "g" : ""}" onclick="trM('sett')" aria-pressed="${!mese}">Settimana</button><button class="b ${mese ? "" : "g"}" onclick="trM('mese')" aria-pressed="${mese}">Mese</button></div>${navB(mese ? MESI[s.getMonth()] + " " + s.getFullYear() : wlab(wkKey(TR.ref)), "trS")}${trLeg()}${
     sess ? svg(340, H + top + 24, stackBars(D, R, { H, top, mx, X: (i) => 14 + i * gap, bw, lab: !mese }) + lab, "Minuti di allenamento per giorno") : '<div class="mu">Nessun allenamento in questo periodo.</div>'
-  }<div class="st2 s4"><div><b>${sess}</b>sedute</div><div><b>${Math.round(tc)}′</b>cardio</div><div><b>${Math.round(tmu)}′</b>muscolare</div><div><b>${fmtD(tk)}</b>km</div></div></div>`;
+  }<div class="st2 s4"><div><b>${cu(sess)}</b>sedute</div><div><b>${cu(Math.round(tc))}′</b>cardio</div><div><b>${cu(Math.round(tmu))}′</b>muscolare</div><div><b>${cu(tk, 1)}</b>km</div></div></div>`;
 }
 
 // grafici: andamento nel tempo, settimana per settimana
@@ -516,7 +936,7 @@ function trendC() {
     mx = Math.max(160, ...R.map((r) => r.mn)) * 1.1, H = 150, top = 12, L = 34, W = 340 - L - 6, gap = W / Q.length, bw = Math.max(2, gap - (Q.length > 30 ? 1.5 : 3)),
     X = (i) => L + i * gap, Y = (v) => top + H - (v / mx) * H;
   const grid = [0, 150, Math.round(mx / 1.1 / 10) * 10].filter((v, i, a) => a.indexOf(v) === i).map((v) => `<line x1="${L}" x2="334" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" style="stroke:${v === 150 ? "var(--tg)" : "var(--bd)"}" stroke-width="${v === 150 ? 1.5 : 1}"${v === 150 ? ' stroke-dasharray="5 4"' : ""}/><text x="${L - 5}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end" class="ax"${v === 150 ? ' style="fill:var(--tg)"' : ""}>${v}′</text>`).join("");
-  const ln = `<path d="${mav.map((v, i) => (i ? "L" : "M") + (X(i) + bw / 2).toFixed(1) + " " + Y(v).toFixed(1)).join("")}" fill="none" style="stroke:var(--tx)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity=".85"/>`;
+  const ln = `<path d="${mav.map((v, i) => (i ? "L" : "M") + (X(i) + bw / 2).toFixed(1) + " " + Y(v).toFixed(1)).join("")}" fill="none" style="stroke:var(--tx)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity=".85" class="ln-a"/>`;
   const mid = Math.floor((Q.length - 1) / 2), xl = `<text x="${L}" y="${top + H + 15}" class="ax">${dl(Q[0])}</text>${Q.length > 2 ? `<text x="${(X(mid) + bw / 2).toFixed(1)}" y="${top + H + 15}" text-anchor="middle" class="ax">${dl(Q[mid])}</text>` : ""}<text x="334" y="${top + H + 15}" text-anchor="end" class="ax">${dl(Q[Q.length - 1])}</text>`;
   const last4 = R.slice(-4), a4 = (f) => last4.reduce((s, z) => s + z[f], 0) / last4.length, tot = R.reduce((s, z) => s + z.mn, 0);
   return `<div class="c"><h3>Andamento allenamenti</h3>${trLeg()}<div class="lg2 tl"><span><i class="ln"></i>Media delle ultime 4 settimane</span></div>${svg(340, H + top + 24, grid + stackBars(Q, R, { H, top, mx, X, bw, lab: false }) + ln + xl, "Minuti di allenamento per settimana nel tempo")}<div class="st2 s4"><div><b>${Math.round(a4("c"))}′</b>cardio a sett.</div><div><b>${Math.round(a4("m"))}′</b>muscolare a sett.</div><div><b>${fmtD(last4.reduce((s, z) => s + z.n, 0) / last4.length)}</b>sedute a sett.</div><div><b>${fmtD(tot / 60, 0)} h</b>in totale</div></div><div class="mu">Ogni barra è una settimana (le medie sono sulle ultime 4). La linea tratteggiata sono i 150′ a settimana di attività aerobica consigliati dal piano, insieme ad almeno 2 sedute di rinforzo muscolare.</div></div>`;
@@ -561,24 +981,24 @@ function home() {
     rest =
       T > 0
         ? tk <= T
-          ? `<span>Restano</span> <b>${fmt(T - tk)} kcal</b> <span>obiettivo ${fmt(T)} · stima</span>`
+          ? `<span>Restano</span> <b>${cu(T - tk)} kcal</b> <span>obiettivo ${fmt(T)} · stima</span>`
           : `<span>Oltre l’obiettivo di</span> <b>${fmt(tk - T)} kcal</b> <span>obiettivo ${fmt(T)} · stima</span>`
         : `<span>Stima dei pasti di oggi.</span> <span>Compila “I miei dati” in Grafici per avere un obiettivo.</span>`;
   let h = `<section class="hero">
 <div class="hd">${lbl(td)}</div>
 <div class="hb2">
-<svg class="ring" viewBox="0 0 120 120" role="img" aria-label="${fmt(tk)} kcal${T ? " di " + fmt(T) : ""}"><circle cx="60" cy="60" r="50" fill="none" style="stroke:var(--tr)" stroke-width="11"/>${pc > 0 ? `<circle cx="60" cy="60" r="50" fill="none" style="stroke:var(--ac)" stroke-width="11" stroke-linecap="round" stroke-dasharray="${(pc * C).toFixed(1)} ${C}" transform="rotate(-90 60 60)"/>` : ""}<text x="60" y="64" text-anchor="middle" class="rn">${fmt(tk)}</text><text x="60" y="81" text-anchor="middle" class="rl">${T ? "di " + fmt(T) + " kcal" : "kcal"}</text></svg>
-<div class="big"><span>Assunte oggi</span><b>${fmt(tk)}</b><em>${T ? "/ " + fmt(T) + " kcal" : "kcal"}</em></div>
+<svg class="ring" viewBox="0 0 120 120" role="img" aria-label="${fmt(tk)} kcal${T ? " di " + fmt(T) : ""}"><circle cx="60" cy="60" r="50" fill="none" style="stroke:var(--tr)" stroke-width="11"/>${pc > 0 ? `<circle cx="60" cy="60" r="50" fill="none" style="stroke:var(--ac)" stroke-width="11" stroke-linecap="round" stroke-dasharray="${(pc * C).toFixed(1)} ${C}" transform="rotate(-90 60 60)" class="rp" data-l="${(pc * C).toFixed(1)}"/>` : ""}<text x="60" y="64" text-anchor="middle" class="rn"><tspan class="cu" data-v="${tk}">${fmt(tk)}</tspan></text><text x="60" y="81" text-anchor="middle" class="rl">${T ? "di " + fmt(T) + " kcal" : "kcal"}</text></svg>
+<div class="big"><span>Assunte oggi</span><b>${cu(tk)}</b><em>${T ? "/ " + fmt(T) + " kcal" : "kcal"}</em></div>
 <div class="hx"><p class="q">Cosa hai mangiato oggi?</p><p class="rest">${rest}</p></div>
 </div>
 <div class="bar" role="img" aria-label="${Math.round(pc * 100)}% dell’obiettivo"><i style="width:${(pc * 100).toFixed(0)}%"></i></div>
 <button class="b cta" onclick="go('${td}')">${S.g[td] ? "Modifica la giornata" : "+ Aggiungi un pasto"}</button>
 </section>
-<div class="st3"><div><b>${ks.length}</b><span>giorni registrati</span></div><div><b>${lw != null ? fmtD(lw) : "–"}</b><span>kg ultimo peso${fw && lw && W.length > 1 ? ` (${lw - fw > 0 ? "+" : ""}${fmtD(lw - fw)})` : ""}</span></div><div><b>${Math.round(mn)}′</b><span>allenamento questa settimana</span></div></div>`;
+<div class="st3"><div><b>${cu(ks.length)}</b><span>giorni registrati</span></div><div><b>${lw != null ? cu(lw, 1) : "–"}</b><span>kg ultimo peso${fw && lw && W.length > 1 ? ` (${lw - fw > 0 ? "+" : ""}${fmtD(lw - fw)})` : ""}</span></div><div><b>${cu(Math.round(mn))}′</b><span>allenamento questa settimana</span></div></div>`;
   const dT = S.g[td] || {};
   if (dT.allenamento) {
     const ts = trainStats(dT.allenamento);
-    h += `<section class="trc"><div><span>Allenamento di oggi</span><b>${esc(dT.allenamento)}</b></div>${ts.km || ts.mn || ts.kc ? `<div class="trn">${ts.km ? `<b>${fmtD(ts.km)} km</b>` : ""}${ts.mn ? `<em>${Math.round(ts.mn)} min</em>` : ""}${ts.kc ? `<em>${fmt(ts.kc)} kcal</em>` : ""}</div>` : ""}</section>`;
+    h += `<section class="trc"><div><span>Allenamento di oggi</span><b>${esc(dT.allenamento)}</b></div>${ts.km || ts.mn || ts.kc ? `<div class="trn">${ts.km ? `<b>${cu(ts.km, 1)} km</b>` : ""}${ts.mn ? `<em>${cu(Math.round(ts.mn))} min</em>` : ""}${ts.kc ? `<em>${fmt(ts.kc)} kcal</em>` : ""}</div>` : ""}</section>`;
   }
   if (F.some((f) => f[0] !== "allenamento" && dT[f[0]])) h += `<section class="c oggi"><h3>Oggi</h3>${dayBody(td, false, ["allenamento"])}</section>`;
   h += weekHome(td);
@@ -667,10 +1087,10 @@ function kPrev(txt) {
 // tipi di allenamento: il nome finisce nel testo e decide se è cardio o muscolare
 const TRT = [
   ["Cardio", ["Corsa", "Camminata", "Trekking", "Bici", "Cyclette", "Spinning", "Ellittica", "Tapis roulant", "Nuoto", "Calcio", "Padel / tennis", "Altro cardio"]],
-  ["Muscolare", ["Palestra (pesi)", "Muscolare a corpo libero", "Circuito / funzionale", "Yoga / pilates", "Altro muscolare"]],
+  ["Muscolare", ["Palestra (pesi)", "Muscolare a corpo libero", "Circuito / funzionale", "Stretching", "Yoga / pilates", "Altro muscolare"]],
 ];
 const trRow = (r = {}) =>
-  `<div class="trr"><div class="trr-t"><label>Attività<select class="tr-t"><option value="">Scegli…</option>${TRT.map(([g, xs]) => `<optgroup label="${g}">${xs.map((x) => `<option${r.t === x ? " selected" : ""}>${x}</option>`).join("")}</optgroup>`).join("")}</select></label><button type="button" class="x trx" aria-label="Rimuovi attività"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></div><div class="trr-n"><label>Minuti<input class="tr-m" inputmode="numeric" value="${esc(r.min ?? "")}" placeholder="es. 45"></label><label>Km <i>facoltativo</i><input class="tr-km" inputmode="decimal" value="${esc(r.km ?? "")}" placeholder="—"></label><label>Kcal <i>se le hai</i><input class="tr-c" inputmode="numeric" value="${esc(r.kcal ?? "")}" placeholder="—"></label></div></div>`;
+  `<div class="trr" data-id="${esc(r.id || "")}" data-src="${esc(r.src || "")}"><div class="trr-t"><label>Attività<select class="tr-t"><option value="">Scegli…</option>${r.t && !TRT.some(([, xs]) => xs.includes(r.t)) ? `<option selected>${esc(r.t)}</option>` : ""}${TRT.map(([g, xs]) => `<optgroup label="${g}">${xs.map((x) => `<option${r.t === x ? " selected" : ""}>${x}</option>`).join("")}</optgroup>`).join("")}</select></label><button type="button" class="x trx" aria-label="Rimuovi attività"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button></div><div class="trr-n"><label>Minuti<input class="tr-m" inputmode="numeric" value="${esc(r.min ?? "")}" placeholder="es. 45"></label><label>Km <i>facoltativo</i><input class="tr-km" inputmode="decimal" value="${esc(r.km ?? "")}" placeholder="—"></label><label>Kcal <i>se le hai</i><input class="tr-c" inputmode="numeric" value="${esc(r.kcal ?? "")}" placeholder="—"></label></div></div>`;
 const trText = (r) => `${r.t}${r.km ? " " + r.km + " km," : ""} ${r.min} minuti${r.kcal ? ", " + r.kcal + " kcal" : ""}`;
 function note() {
   const d = S.g[sel] || {}, att = Array.isArray(d.att) ? d.att : [], legacy = att.length ? d.alln || "" : d.allenamento || "";
@@ -754,7 +1174,7 @@ function bindNote() {
       if (v) o[f[0]] = v;
     });
     const att = [...document.querySelectorAll("#trs .trr")]
-      .map((r) => ({ t: r.querySelector(".tr-t").value, min: num(r.querySelector(".tr-m").value), km: num(r.querySelector(".tr-km").value), kcal: num(r.querySelector(".tr-c").value) }))
+      .map((r) => ({ t: r.querySelector(".tr-t").value, min: num(r.querySelector(".tr-m").value), km: num(r.querySelector(".tr-km").value), kcal: num(r.querySelector(".tr-c").value), id: r.dataset.id || undefined, src: r.dataset.src || undefined }))
       .filter((r) => r.t && (r.min || r.km || r.kcal))
       .map((r) => Object.fromEntries(Object.entries(r).filter(([, v]) => v != null && v !== "")));
     const note = $("#f_alln").value.trim(), txt = [att.map(trText).join(" + "), note].filter(Boolean).join("; ");
@@ -846,8 +1266,8 @@ function line(vals, labs, col2, o = {}) {
     .map((v) => `<line x1="40" x2="${w - 10}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" style="stroke:var(--bd)" stroke-width="1"/><text x="34" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end" class="ax">${fmtD(v, dec)}</text>`)
     .join("");
   if (hasT) b += `<line x1="40" x2="${w - 10}" y1="${Y(o.tg).toFixed(1)}" y2="${Y(o.tg).toFixed(1)}" style="stroke:var(--tg)" stroke-width="1.5" stroke-dasharray="5 4"/><text x="${w - 10}" y="${(Y(o.tg) - 4).toFixed(1)}" text-anchor="end" class="ax" style="fill:var(--tg)">${esc(o.tl || "obiettivo")}</text>`;
-  b += `<path d="${vals.map((v, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1)).join("")}" fill="none" style="stroke:${col2}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
-  if (vals.length <= 40) b += vals.map((v, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="3" style="fill:${col2}"/>`).join("");
+  b += `<path d="${vals.map((v, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1)).join("")}" fill="none" style="stroke:${col2}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" class="ln-a"/>`;
+  if (vals.length <= 40) b += vals.map((v, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="3" style="fill:${col2}" class="dot-a"/>`).join("");
   const mid = Math.floor((vals.length - 1) / 2);
   b += `<text x="40" y="${h - 4}" class="ax">${labs[0]}</text>${vals.length > 2 ? `<text x="${X(mid).toFixed(1)}" y="${h - 4}" text-anchor="middle" class="ax">${labs[mid]}</text>` : ""}<text x="${w - 10}" y="${h - 4}" text-anchor="end" class="ax">${labs[labs.length - 1]}</text>`;
   return svg(w, h, b, o.lab);
@@ -900,6 +1320,7 @@ function calW() {
             let y = top + H;
             const X = 12 + i * 46;
             return (
+              `<g class="ba" style="transform-origin:0 ${top + H}px">` +
               x[1]
                 .map((v, j) => {
                   if (!v) return "";
@@ -908,6 +1329,7 @@ function calW() {
                   return `<rect x="${X}" y="${y.toFixed(1)}" width="34" height="${hh.toFixed(1)}" style="fill:var(--m-${KM[j]})"/>`;
                 })
                 .join("") +
+              "</g>" +
               `<text x="${X + 17}" y="${top + H + 15}" text-anchor="middle" class="ax">${GS[pd(x[0]).getDay()].slice(0, 3)}</text>` +
               (tot[i] ? `<text x="${X + 17}" y="${(Y(tot[i]) - 4).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="700">${fmt(tot[i])}</text>` : "")
             );
@@ -948,8 +1370,9 @@ function calDayC() {
 /* ---------- composizione corporea ---------- */
 const hist = () => (S.p.storia || []).filter((x) => num(x.peso) && num(x.grasso)).slice().sort((a, b) => (a.d || "").localeCompare(b.d || ""));
 function comp(x) {
-  const p = num(x.peso), gf = num(x.grasso), fat = (p * gf) / 100, lean = p - fat, m0 = num(x.lean), mus = m0 && m0 < lean ? m0 : lean * 0.95;
-  return { p, gf, fat, lean, mus, bone: Math.max(0, lean - mus), est: !(m0 && m0 < lean) };
+  const p = num(x.peso), gf = num(x.grasso), fat = (p * gf) / 100, lean = p - fat, m0 = num(x.lean), os = num(x.ossa);
+  const mus = m0 && m0 < lean ? m0 : os && os < lean ? lean - os : lean * 0.95;
+  return { p, gf, fat, lean, mus, bone: os && os < lean ? os : Math.max(0, lean - mus), boneM: !!(os && os < lean), est: !(m0 && m0 < lean) && !(os && os < lean), x };
 }
 // figure della composizione corporea: una immagine per fascia di BMI
 const FIG = { normale: "img/figura-normale.webp", sovrappeso: "img/figura-sovrappeso.webp", obesita: "img/figura-obesita.webp", grave: "img/figura-grave.webp", estrema: "img/figura-estrema.webp" };
@@ -966,7 +1389,7 @@ const bmiCat = (b) => BMIC.findIndex((x) => b < x.max);
 const catName = (b) => (b < 18.5 ? "Sottopeso" : BMIC[bmiCat(b)].n);
 function bodyFig(c) {
   const b = bmiOf(c.p), k = BMIC[bmiCat(b)];
-  return `<figure class="bfig"><img id="bfi" src="${FIG[k.k]}" alt="Figura della fascia ${catName(b).toLowerCase()}"><figcaption id="bfc"><b style="background:${k.c};color:${k.t}">${catName(b)}</b><span>BMI ${fmtD(b)}</span></figcaption></figure>`;
+  return `<figure class="bfig"><img id="bfi" src="${FIG[k.k]}" alt="Figura della fascia ${catName(b).toLowerCase()}"><figcaption id="bfc"><b style="background:${k.c};color:${k.t}">${catName(b)}</b><span>BMI ${cu(b, 1)}</span></figcaption></figure>`;
 }
 function bodySeq(c) {
   const ci = bmiCat(bmiOf(c.p)), ob = num(S.p.obj), oi = ob ? bmiCat(bmiOf(ob)) : -1;
@@ -981,10 +1404,14 @@ function dlt(v, good) {
   return ` <small class="${ok ? "gd" : "bad"}">${v > 0 ? "+" : ""}${fmtD(v)}</small>`;
 }
 function bodyLeg(c, p) {
-  return `<div class="bl-r"><i style="background:var(--ft);border-color:var(--fte)"></i><div><span>Massa grassa</span><b>${fmtD(c.fat)} kg${dlt(p && c.fat - p.fat, "dn")}</b><em>${fmtD(c.gf)}% del peso</em></div></div>
-<div class="bl-r"><i style="background:var(--ms);border-color:var(--mso)"></i><div><span>Massa muscolare${c.est ? " (stima)" : ""}</span><b>${fmtD(c.mus)} kg${dlt(p && c.mus - p.mus, "up")}</b><em>${fmtD((c.mus / c.p) * 100)}% del peso</em></div></div>
-<div class="bl-r"><i style="background:var(--bn);border-color:var(--bno)"></i><div><span>Ossa e resto</span><b>${fmtD(c.bone)} kg</b><em>stima per differenza</em></div></div>
-<div class="bl-r tot"><div><span>Peso</span><b>${fmtD(c.p)} kg${dlt(p && c.p - p.p, "dn")}</b></div></div>`;
+  return `<div class="bl-r"><i style="background:var(--ft);border-color:var(--fte)"></i><div><span>Massa grassa</span><b>${cu(c.fat, 1)} kg${dlt(p && c.fat - p.fat, "dn")}</b><em>${fmtD(c.gf)}% del peso</em></div></div>
+<div class="bl-r"><i style="background:var(--ms);border-color:var(--mso)"></i><div><span>Massa muscolare${c.est ? " (stima)" : ""}</span><b>${cu(c.mus, 1)} kg${dlt(p && c.mus - p.mus, "up")}</b><em>${fmtD((c.mus / c.p) * 100)}% del peso</em></div></div>
+<div class="bl-r"><i style="background:var(--bn);border-color:var(--bno)"></i><div><span>${c.boneM ? "Massa ossea" : "Ossa e resto"}</span><b>${cu(c.bone, 1)} kg</b><em>${c.boneM ? "massa ossea misurata" : "stima per differenza"}</em></div></div>
+<div class="bl-r tot"><div><span>Peso</span><b>${cu(c.p, 1)} kg${dlt(p && c.p - p.p, "dn")}</b></div></div>`;
+}
+function ffExtra(c) {
+  const x = c.x || {}, it = [["scheletrico", "Muscolo scheletrico", "%"], ["acqua", "Idratazione", "%"], ["proteine", "Proteine", "%"], ["viscerale", "Grasso addominale", ""], ["bmr", "Metabolismo basale", " kcal"], ["eta", "Età metabolica", " anni"]].filter(([k]) => num(x[k]) != null);
+  return it.length ? `<div class="ffx">${it.map(([k, n, u]) => `<div><span>${n}</span><b>${fmtD(num(x[k]), 1)}${u}</b></div>`).join("")}</div>` : "";
 }
 function bbar(c) {
   const a = (c.fat / c.p) * 100, b = (c.mus / c.p) * 100;
@@ -1003,7 +1430,7 @@ function bodyC() {
     H.length > 1
       ? `<div class="pn"><button class="b g" id="bcp" onclick="bcS(-1)" aria-label="Misurazione precedente"${BC.i ? "" : " disabled"}>◀</button><span id="bcd">${dname}</span><button class="b g" id="bcn" onclick="bcS(1)" aria-label="Misurazione successiva"${BC.i < H.length - 1 ? "" : " disabled"}>▶</button></div>`
       : `<div class="pn one"><span>${dname}</span></div>`
-  }<div class="bc">${bodyFig(c)}<div class="bl" id="bcl">${bodyLeg(c, p)}</div></div><div class="bbar" id="bcb" aria-hidden="true">${bbar(c)}</div><div class="mu" id="bcm">${bodyNote(c)} Ogni volta che salvi i dati si aggiunge una misurazione, e con le frecce le confronti.</div><h4 class="sqh">Le fasce</h4><div id="bcs">${bodySeq(c)}</div></div>`;
+  }<div class="bc">${bodyFig(c)}<div class="bl" id="bcl">${bodyLeg(c, p)}</div></div><div class="bbar" id="bcb" aria-hidden="true">${bbar(c)}</div><div id="bcx">${ffExtra(c)}</div><div class="mu" id="bcm">${bodyNote(c)} Ogni volta che salvi i dati si aggiunge una misurazione, e con le frecce le confronti.</div><h4 class="sqh">Le fasce</h4><div id="bcs">${bodySeq(c)}</div></div>`;
 }
 window.bcS = (n) => {
   const H = hist();
@@ -1020,7 +1447,9 @@ window.bcS = (n) => {
   $("#bfc").innerHTML = `<b style="background:${k.c};color:${k.t}">${catName(b)}</b><span>BMI ${fmtD(b)}</span>`;
   $("#bcl").innerHTML = bodyLeg(c, p);
   $("#bcb").innerHTML = bbar(c);
+  $("#bcx").innerHTML = ffExtra(c);
   $("#bcs").innerHTML = bodySeq(c);
+  if (animOn()) { countUps($("#bcl")); countUps($("#bfc")); fillBars($("#bcb").parentNode); }
   $("#bcm").innerHTML = bodyNote(c) + " Ogni volta che salvi i dati si aggiunge una misurazione, e con le frecce le confronti.";
   $("#bcd").textContent = x.d ? lbl(x.d) + " " + x.d.slice(0, 4) : "Misurazione iniziale";
   $("#bcp").disabled = BC.i === 0;
@@ -1284,7 +1713,7 @@ async function makePdf(D0, nome) {
       const d = S.g[k] || {}, filled = hasMeal(d);
       const right = [PX.note && d.peso ? "Peso " + pt(d.peso) + (/kg/i.test(d.peso) ? "" : " kg") : "", PX.kc && filled ? "~" + fmt(dayK(k)) + " kcal" : ""].filter(Boolean).join("   ");
       const body = [];
-      if (!filled) body.push([{ content: "Giorno non compilato", colSpan: 2, styles: { textColor: MUT, fontStyle: "italic" } }]);
+      if (!filled) body.push([{ content: "-", styles: { textColor: MUT } }, { content: "Giorno non compilato", styles: { textColor: MUT, fontStyle: "italic" } }]);
       else {
         meals.forEach((f) => body.push([{ content: f[1], styles: { fontStyle: "bold", textColor: MUT } }, (pt(d[f[0]]) || "-") + (PX.kc && d[f[0]] ? `   (~${fmt(kcal(d[f[0]]).t)} kcal)` : "")]));
         if (PX.tr && d.allenamento) body.push([{ content: "Allenamento", styles: { fontStyle: "bold", textColor: MUT } }, trOf(d)]);
@@ -1413,6 +1842,8 @@ async function makePdf(D0, nome) {
         doc.setFont("helvetica", "normal"); doc.text(val, tx + 46, yy);
         if (dd != null && Math.abs(dd) >= 0.05) { doc.setTextColor(...MUT); doc.text(`${dd > 0 ? "+" : ""}${fmtD(dd)} kg dalla misurazione precedente`, tx + 88, yy); }
       });
+      const xe = [["scheletrico", "Muscolo scheletrico", "%"], ["acqua", "Idratazione", "%"], ["viscerale", "Grasso addominale", ""], ["eta", "Eta metabolica", ""]].filter(([k]) => num(last[k]) != null).map(([k, n, u]) => `${n} ${fmtD(num(last[k]))}${u}`);
+      if (xe.length) { doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(...MUT); doc.text(xe.join("   ·   "), tx, by + 13 + 3 * 8 + 1); }
       y += fh + 10;
     }
     // 3) peso nel periodo
@@ -1439,6 +1870,8 @@ async function makePdf(D0, nome) {
   footer();
   return doc;
 }
+
+/* ---------- piano ---------- */
 
 /* ---------- piano ---------- */
 

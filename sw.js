@@ -1,8 +1,9 @@
 // Service worker: l'app funziona anche senza rete e prende da sola gli aggiornamenti.
 // Quando si pubblica una nuova versione basta cambiare VERSIONE.
-const VERSIONE = "diario-v2";
+// I file del lettore (cartella ocr) non sono precaricati: si salvano la prima volta che leggi una schermata Feelfit.
+const VERSIONE = "diario-v3";
 const FILE = [
-  "./", "index.html", "manifest.webmanifest", "css/style.css", "js/theme.js", "js/app.js", "js/jspdf.umd.min.js", "js/jspdf.plugin.autotable.min.js",
+  "./", "index.html", "manifest.webmanifest", "css/style.css", "js/theme.js", "js/app.js", "js/jspdf.umd.min.js", "js/jspdf.plugin.autotable.min.js", "js/anime.umd.min.js", "js/fflate.min.js",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png",
   "img/figura-normale.webp", "img/figura-sovrappeso.webp", "img/figura-obesita.webp", "img/figura-grave.webp", "img/figura-estrema.webp",
 ];
@@ -11,7 +12,7 @@ self.addEventListener("install", (e) => {
 });
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== VERSIONE && k !== "diario-font").map((k) => caches.delete(k)))).then(() => self.clients.claim()),
+    caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== VERSIONE && k !== "diario-font" && k !== "diario-ocr").map((k) => caches.delete(k)))).then(() => self.clients.claim()),
   );
 });
 self.addEventListener("fetch", (e) => {
@@ -28,6 +29,10 @@ self.addEventListener("fetch", (e) => {
     return;
   }
   if (url.origin !== location.origin) return;
+  if (url.pathname.includes("/ocr/")) {
+    e.respondWith(caches.open("diario-ocr").then((c) => c.match(req).then((hit) => hit || fetch(req).then((r) => { if (r.ok) c.put(req, r.clone()); return r; }))));
+    return;
+  }
   // file dell'app: prima dalla rete (così arrivano gli aggiornamenti), se non c'è rete dalla cache
   e.respondWith(
     fetch(req)
