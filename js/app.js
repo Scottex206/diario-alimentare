@@ -496,6 +496,7 @@ function setHtml() {
 <div class="dbt"><button class="b" id="imb">Importa dati</button><input type="file" id="imf" accept=".json,application/json" hidden><button class="b g" id="exf">Esporta backup</button></div>
 <p class="mu" id="imo" role="status"></p>
 <button class="lnk dz" id="clr">Cancella tutti i dati da questo telefono</button>
+<p class="mu ver">Versione dell’app: 23 novembre 2026 (v4)</p>
 <div class="lb">Tema</div>
 <div class="thg">${Object.entries(THEMES)
     .map(([k, t]) => {

@@ -34,7 +34,10 @@
 <script src="js/fflate.min.js"></script>
 <script src="js/app.js"></script>
 <script>
-if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((r) => r.update()).catch(() => {}));
+let ricaricata = false;
+const giaInstallata = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+navigator.serviceWorker && navigator.serviceWorker.addEventListener("controllerchange", () => { if (giaInstallata && !ricaricata) { ricaricata = true; location.reload(); } });
 </script>
 </body>
 </html>
