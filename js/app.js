@@ -504,7 +504,7 @@ function setHtml() {
 <div class="dbt"><button class="b" id="imb">Importa dati</button><input type="file" id="imf" accept=".json,application/json" hidden><button class="b g" id="exf">Esporta backup</button></div>
 <p class="mu" id="imo" role="status"></p>
 <button class="lnk dz" id="clr">Cancella tutti i dati da questo telefono</button>
-<p class="mu ver">Versione dell’app: 26 novembre 2026 (v6)</p>
+<p class="mu ver">Versione dell’app: 26 novembre 2026 (v7)</p>
 <div class="lb">Tema</div>
 <div class="thg">${Object.entries(THEMES)
     .map(([k, t]) => {
@@ -1108,13 +1108,79 @@ function frequent(slot) {
   );
   return Object.keys(cnt).filter((k) => cnt[k] >= 2).sort((a, b) => cnt[b] - cnt[a]).slice(0, 12).map((k) => last[k]);
 }
+function preList(slot) {
+  const fr = frequent(slot), G = [];
+  if (fr.length) G.push([`I tuoi ${slot === "spuntino" || slot === "merenda" ? "spuntini" : "pasti"} più frequenti`, fr.map((v) => "P|" + v)]);
+  (PRE[slot] || []).forEach(([g, xs]) => G.push([g + " (dosi del piano)", xs.map((v) => "C|" + v)]));
+  if (myFoods().length) G.push(["I miei alimenti", myFoods().map((c) => "C|" + c.n)]);
+  return G;
+}
 function preSel(slot) {
-  const fr = frequent(slot), op = (v, t) => `<option value="${esc(v)}">${esc(t || v)}</option>`;
-  return `<select class="pre" data-for="${slot}" aria-label="Scegli dai pasti e cibi frequenti"><option value="">＋ Frequenti</option>${
-    fr.length ? `<optgroup label="I tuoi ${slot === "spuntino" || slot === "merenda" ? "spuntini" : "pasti"} più frequenti">${fr.map((v) => op("P|" + v, v)).join("")}</optgroup>` : ""
-  }${(PRE[slot] || []).map(([g, xs]) => `<optgroup label="${g} (dosi del piano)">${xs.map((v) => op("C|" + v, v)).join("")}</optgroup>`).join("")}${
-    myFoods().length ? `<optgroup label="I miei alimenti">${myFoods().map((c) => op("C|" + c.n, c.n)).join("")}</optgroup>` : ""
-  }</select>`;
+  return `<button type="button" class="pre" data-for="${slot}" aria-haspopup="dialog">＋ Frequenti</button>`;
+}
+// pannello dei frequenti: scegli quante voci vuoi, poi OK compila la casella, Annulla chiude senza toccarla
+function addPre(cur, v) {
+  const kind = v.slice(0, 1), txt = v.slice(2);
+  cur = cur.trim();
+  if (!cur) return txt;
+  return cur + (kind === "C" && txt.startsWith("(") ? " " : ", ") + txt;
+}
+function openFrq(slot) {
+  const G = preList(slot), all = G.flatMap(([, xs]) => xs), pick = [];
+  let o = $("#frq");
+  if (!o) {
+    o = document.createElement("div");
+    o.id = "frq";
+    o.className = "sheet";
+    document.body.appendChild(o);
+  }
+  const nm = { colazione: "Colazione", spuntino: "Spuntino", pranzo: "Pranzo", merenda: "Merenda", cena: "Cena" }[slot] || slot;
+  o.innerHTML = `<div class="sh-in frq-in" role="dialog" aria-modal="true" aria-labelledby="frq-t">
+<div class="sh-hd"><h3 id="frq-t">Frequenti · ${nm}</h3></div>
+<div class="frq-l">${G.map(([g, xs]) => `<p class="frq-g">${esc(g)}</p><div class="frq-c">${xs.map((v) => `<button type="button" class="frq-i${v[0] === "P" ? " frq-p" : ""}" data-i="${all.indexOf(v)}" aria-pressed="false">${esc(v.slice(2))}</button>`).join("")}</div>`).join("") || '<p class="mu">Ancora nessun pasto frequente.</p>'}</div>
+<div class="frq-f"><div class="frq-r" role="status" aria-live="polite"></div><div class="frq-b"><button type="button" class="b ghost frq-x">ANNULLA</button><button type="button" class="b frq-ok">OK</button></div></div></div>`;
+  const ta = $("#f_" + slot), rs = o.querySelector(".frq-r"), ok = o.querySelector(".frq-ok");
+  const upd = () => {
+    o.querySelectorAll(".frq-i").forEach((b) => {
+      const n = pick.indexOf(+b.dataset.i);
+      b.setAttribute("aria-pressed", n >= 0);
+      b.dataset.n = n >= 0 ? n + 1 : "";
+    });
+    rs.innerHTML = pick.length ? `<span>Aggiungi (${pick.length}):</span> ${esc(pick.map((i) => all[i].slice(2)).join(", "))}` : '<span class="mu">Tocca una o più voci</span>';
+    ok.disabled = !pick.length;
+  };
+  upd();
+  const close = (apply) => {
+    if (apply && pick.length) {
+      let v = ta.value;
+      pick.forEach((i) => (v = addPre(v, all[i])));
+      ta.value = v;
+      ta.dispatchEvent(new Event("input"));
+    }
+    o.hidden = true;
+    document.body.style.overflow = "";
+    document.querySelector(`.pre[data-for="${slot}"]`)?.focus();
+  };
+  o.querySelectorAll(".frq-i").forEach(
+    (b) =>
+      (b.onclick = () => {
+        const i = +b.dataset.i, n = pick.indexOf(i);
+        n >= 0 ? pick.splice(n, 1) : pick.push(i);
+        upd();
+      }),
+  );
+  o.querySelector(".frq-x").onclick = () => close(false);
+  ok.onclick = () => close(true);
+  o.onclick = (e) => {
+    if (e.target === o) close(false);
+  };
+  o.onkeydown = (e) => {
+    if (e.key === "Escape") close(false);
+  };
+  o.hidden = false;
+  document.body.style.overflow = "hidden";
+  o.querySelector(".frq-l").scrollTop = 0;
+  (o.querySelector(".frq-i") || o.querySelector(".frq-x")).focus({ preventScroll: true });
 }
 // anteprima della stima sotto ogni pasto
 function kPrev(txt) {
@@ -1160,19 +1226,7 @@ function bindNote() {
     }
   };
   // menu a tendina: un pasto intero sostituisce il testo vuoto, un cibo si aggiunge in fondo
-  document.querySelectorAll("select.pre").forEach(
-    (s) =>
-      (s.onchange = () => {
-        const v = s.value;
-        if (!v) return;
-        const ta = $("#f_" + s.dataset.for), [kind, txt] = [v.slice(0, 1), v.slice(2)], cur = ta.value.trim();
-        if (kind === "P" || !cur) ta.value = kind === "P" && cur ? cur + ", " + txt : txt;
-        else ta.value = cur + (txt.startsWith("(") ? " " : ", ") + txt;
-        s.value = "";
-        ta.dispatchEvent(new Event("input"));
-        ta.focus();
-      }),
-  );
+  document.querySelectorAll("button.pre").forEach((s) => (s.onclick = () => openFrq(s.dataset.for)));
   document.querySelectorAll("textarea[data-meal]").forEach((ta) => (ta.oninput = () => ($("#kp_" + ta.dataset.meal).innerHTML = kPrev(ta.value))));
   $("#m").onclick = (e) => {
     const a = e.target.closest("[data-addfood]"), dl = e.target.closest("[data-delfood]"), x = e.target.closest(".trx");
@@ -1247,7 +1301,7 @@ function keepNote() {
   $("#myf .mfl")?.remove();
   $("#myf .mu").insertAdjacentHTML("afterend", myFoodList());
   document.querySelectorAll("textarea[data-meal]").forEach((ta) => ($("#kp_" + ta.dataset.meal).innerHTML = kPrev(ta.value)));
-  document.querySelectorAll("select.pre").forEach((s) => (s.outerHTML = preSel(s.dataset.for)));
+  document.querySelectorAll("button.pre").forEach((s) => (s.outerHTML = preSel(s.dataset.for)));
   bindNote();
 }
 function parse(t, y) {

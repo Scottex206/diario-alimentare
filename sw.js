@@ -1,7 +1,7 @@
 // Service worker: l'app funziona anche senza rete e prende da sola gli aggiornamenti.
 // Quando si pubblica una nuova versione basta cambiare VERSIONE.
 // I file del lettore (cartella ocr) non sono precaricati: si salvano la prima volta che leggi una schermata Feelfit.
-const VERSIONE = "diario-v6";
+const VERSIONE = "diario-v7";
 const FILE = [
   "./", "index.html", "manifest.webmanifest", "css/style.css", "js/theme.js", "js/app.js", "js/jspdf.umd.min.js", "js/jspdf.plugin.autotable.min.js", "js/anime.umd.min.js", "js/fflate.min.js",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png",
