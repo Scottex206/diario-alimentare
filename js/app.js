@@ -84,6 +84,7 @@ function render() {
   $("#m").onclick = null;
   $("#m").innerHTML = tab === "home" ? home() : tab === "note" ? note() : tab === "graf" ? graf() : piano();
   animateView();
+  if (tab === "home") bindSwipe();
   if (tab === "note") bindNote();
   if (tab === "graf") bindGraf();
 }
@@ -123,9 +124,13 @@ function fillBars(root, delay = 0) {
   });
 }
 function animateView() {
+  const dir = HDIR;
+  HDIR = 0;
   if (!animOn()) return;
   const m = $("#m"), blocks = [...m.children];
-  AN.animate(blocks, { opacity: [0, 1], translateY: [22, 0], duration: 650, delay: AN.stagger(70), ease: "outCubic" });
+  // cambio di giorno in home: solo una scivolata laterale, senza rifare l'ingresso di tutte le schede
+  if (dir) AN.animate(m.querySelectorAll(".hero, .trc, .oggi, .wkh"), { opacity: [0, 1], translateX: [dir * 46, 0], duration: 420, delay: AN.stagger(40), ease: "outCubic" });
+  else AN.animate(blocks, { opacity: [0, 1], translateY: [22, 0], duration: 650, delay: AN.stagger(70), ease: "outCubic" });
   // anello delle calorie che si riempie
   m.querySelectorAll(".rp").forEach((c) => {
     const L = parseFloat(c.dataset.l);
@@ -264,7 +269,8 @@ window.openSH = async (files) => {
     if (!r.A.length && !r.W.length) throw new Error("vuoto");
     const ks = Object.keys(S.g).sort();
     if (!S.p.shDa) { S.p.shDa = dk(new Date()); saveP(); }
-    SH = { ...r, o: { from: S.p.shDa, to: "9999-12-31", man: true, auto: false, amin: 20, mode: "keep", w: true, wd: true } };
+    // scelte predefinite di Alex; poi si ricordano quelle usate l’ultima volta
+    SH = { ...r, o: { man: true, auto: false, amin: 1, mode: "keep", w: false, wd: false, ...(S.p.shOpt || {}), from: S.p.shDa, to: "9999-12-31" } };
   } catch (e) {
     o.innerHTML = `<div class="sh-in"><div class="sh-hd"><h3>Importa da Samsung Health</h3><button class="x" id="sh2x" aria-label="Chiudi">✕</button></div><p>Non trovo allenamenti o pesate in questo file. Scegli lo ZIP di “Scarica dati personali” di Samsung Health, oppure i file che contengono “exercise” e “weight”.</p></div>`;
     $("#sh2x").onclick = () => { o.hidden = true; document.body.style.overflow = ""; };
@@ -279,6 +285,8 @@ window.openSH = async (files) => {
     if ($("#sh_a").value && $("#sh_a").value !== x.from) { x.from = $("#sh_a").value; S.p.shDa = x.from; saveP(); }
     x.man = $("#sh_m").checked; x.auto = $("#sh_au").checked; x.amin = num($("#sh_am").value) || 0;
     x.mode = $("#sh_md").value; x.w = $("#sh_w").checked; x.wd = $("#sh_wd").checked;
+    const so = { man: x.man, auto: x.auto, amin: x.amin, mode: x.mode, w: x.w, wd: x.wd };
+    if (JSON.stringify(so) !== JSON.stringify(S.p.shOpt)) { S.p.shOpt = so; saveP(); }
     $("#sh_i").innerHTML = shInfo();
     $("#sh_o").textContent = "";
   };
@@ -496,7 +504,7 @@ function setHtml() {
 <div class="dbt"><button class="b" id="imb">Importa dati</button><input type="file" id="imf" accept=".json,application/json" hidden><button class="b g" id="exf">Esporta backup</button></div>
 <p class="mu" id="imo" role="status"></p>
 <button class="lnk dz" id="clr">Cancella tutti i dati da questo telefono</button>
-<p class="mu ver">Versione dell’app: 23 novembre 2026 (v4)</p>
+<p class="mu ver">Versione dell’app: 26 novembre 2026 (v6)</p>
 <div class="lb">Tema</div>
 <div class="thg">${Object.entries(THEMES)
     .map(([k, t]) => {
@@ -870,6 +878,36 @@ const trLeg = (c, m) => `<div class="lg2 tl"><span><i style="background:var(--tc
 
 // home: minuti della settimana
 let HW = { ref: null };
+// giorno mostrato in home: non viene salvato, quindi a ogni riapertura si riparte da oggi
+let HD = null, HDIR = 0, hidAt = 0;
+window.hdS = (n) => {
+  const td = dk(new Date()), cur = HD && HD < td ? HD : td;
+  let nx = n === 0 ? td : addD(cur, n);
+  if (nx > td) nx = td;
+  if (nx === cur) return;
+  HDIR = nx > cur ? 1 : -1;
+  HD = nx === td ? null : nx;
+  HW.ref = null;
+  render();
+};
+// app rimasta in background per più di mezz'ora: si torna a oggi
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) hidAt = Date.now();
+  else if (hidAt && Date.now() - hidAt > 30 * 60000 && HD) { HD = null; HW.ref = null; if (tab === "home") render(); }
+});
+// scorrimento col dito sul riquadro del giorno
+function bindSwipe() {
+  const el = $(".hero");
+  if (!el) return;
+  let x0 = null, y0 = 0;
+  el.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+  el.addEventListener("touchend", (e) => {
+    if (x0 == null) return;
+    const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) > 60 && Math.abs(dy) < 50) hdS(dx < 0 ? 1 : -1);
+  }, { passive: true });
+}
 window.hwS = (n) => {
   HW.ref = shiftP(HW.ref || dk(new Date()), "sett", n);
   render();
@@ -882,7 +920,7 @@ function weekHome(td) {
     D.push(dk(d));
   }
   const R = D.map(dayTr), tc = R.reduce((a, r) => a + r.c, 0), tmu = R.reduce((a, r) => a + r.m, 0), sess = R.filter((r) => r.mn).length,
-    mx = Math.max(60, ...R.map((r) => r.mn)) * 1.15, H = 112, top = 14, cur = wkKey(ref) === wkKey(td);
+    mx = Math.max(60, ...R.map((r) => r.mn)) * 1.15, H = 112, top = 14, cur = wkKey(ref) === wkKey(dk(new Date()));
   const bars = stackBars(D, R, { H, top, mx, X: (i) => 8 + i * 47, bw: 36, lab: true }),
     base = D.map((k, i) => (R[i].mn ? "" : `<rect x="${8 + i * 47}" y="${top + H - 4}" width="36" height="4" rx="2" style="fill:var(--tr)"/>`)).join(""),
     days = D.map((k, i) => `<text x="${8 + i * 47 + 18}" y="${top + H + 15}" text-anchor="middle" class="ax"${k === td ? ' style="fill:var(--tx);font-weight:700"' : ""}>${GS[pd(k).getDay()].slice(0, 3)}</text>`).join("");
@@ -967,6 +1005,8 @@ function dayHtml(k) {
 function home() {
   const ks = Object.keys(S.g).sort(),
     td = dk(new Date()),
+    day = HD && HD < td ? HD : td,
+    isT = day === td,
     W = ks.filter((k) => num(S.g[k].peso)),
     lw = W.length ? num(S.g[W[W.length - 1]].peso) : null,
     fw = W.length ? num(S.g[W[0]].peso) : null,
@@ -976,7 +1016,7 @@ function home() {
   ks.forEach((k) => {
     if (k >= w0 && k <= td && S.g[k].allenamento) mn += trainStats(S.g[k].allenamento).mn;
   });
-  const tk = dayK(td),
+  const tk = dayK(day),
     pc = T > 0 ? Math.min(1, tk / T) : 0,
     C = 314.16,
     rest =
@@ -986,23 +1026,24 @@ function home() {
           : `<span>Oltre l’obiettivo di</span> <b>${fmt(tk - T)} kcal</b> <span>obiettivo ${fmt(T)} · stima</span>`
         : `<span>Stima dei pasti di oggi.</span> <span>Compila “I miei dati” in Grafici per avere un obiettivo.</span>`;
   let h = `<section class="hero">
-<div class="hd">${lbl(td)}</div>
+<button class="hn hp" onclick="hdS(-1)" aria-label="Giorno precedente"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="hn hx2" onclick="hdS(1)" aria-label="Giorno successivo"${isT ? " disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+<div class="hd">${isT ? "" : '<span class="pass">giorno passato · </span>'}${lbl(day)}${isT ? "" : ` <button class="hoggi" onclick="hdS(0)">torna a oggi</button>`}</div>
 <div class="hb2">
 <svg class="ring" viewBox="0 0 120 120" role="img" aria-label="${fmt(tk)} kcal${T ? " di " + fmt(T) : ""}"><circle cx="60" cy="60" r="50" fill="none" style="stroke:var(--tr)" stroke-width="11"/>${pc > 0 ? `<circle cx="60" cy="60" r="50" fill="none" style="stroke:var(--ac)" stroke-width="11" stroke-linecap="round" stroke-dasharray="${(pc * C).toFixed(1)} ${C}" transform="rotate(-90 60 60)" class="rp" data-l="${(pc * C).toFixed(1)}"/>` : ""}<text x="60" y="64" text-anchor="middle" class="rn"><tspan class="cu" data-v="${tk}">${fmt(tk)}</tspan></text><text x="60" y="81" text-anchor="middle" class="rl">${T ? "di " + fmt(T) + " kcal" : "kcal"}</text></svg>
-<div class="big"><span>Assunte oggi</span><b>${cu(tk)}</b><em>${T ? "/ " + fmt(T) + " kcal" : "kcal"}</em></div>
-<div class="hx"><p class="q">Cosa hai mangiato oggi?</p><p class="rest">${rest}</p></div>
+<div class="big"><span>${isT ? "Assunte oggi" : "Assunte"}</span><b>${cu(tk)}</b><em>${T ? "/ " + fmt(T) + " kcal" : "kcal"}</em></div>
+<div class="hx"><p class="q">${isT ? "Cosa hai mangiato oggi?" : "Cosa hai mangiato?"}</p><p class="rest">${rest}</p></div>
 </div>
 <div class="bar" role="img" aria-label="${Math.round(pc * 100)}% dell’obiettivo"><i style="width:${(pc * 100).toFixed(0)}%"></i></div>
-<button class="b cta" onclick="go('${td}')">${S.g[td] ? "Modifica la giornata" : "+ Aggiungi un pasto"}</button>
+<button class="b cta" onclick="go('${day}')">${S.g[day] ? "Modifica la giornata" : "+ Aggiungi un pasto"}</button>
 </section>
 <div class="st3"><div><b>${cu(ks.length)}</b><span>giorni registrati</span></div><div><b>${lw != null ? cu(lw, 1) : "–"}</b><span>kg ultimo peso${fw && lw && W.length > 1 ? ` (${lw - fw > 0 ? "+" : ""}${fmtD(lw - fw)})` : ""}</span></div><div><b>${cu(Math.round(mn))}′</b><span>allenamento questa settimana</span></div></div>`;
-  const dT = S.g[td] || {};
+  const dT = S.g[day] || {};
   if (dT.allenamento) {
     const ts = trainStats(dT.allenamento);
-    h += `<section class="trc"><div><span>Allenamento di oggi</span><b>${esc(dT.allenamento)}</b></div>${ts.km || ts.mn || ts.kc ? `<div class="trn">${ts.km ? `<b>${cu(ts.km, 1)} km</b>` : ""}${ts.mn ? `<em>${cu(Math.round(ts.mn))} min</em>` : ""}${ts.kc ? `<em>${fmt(ts.kc)} kcal</em>` : ""}</div>` : ""}</section>`;
+    h += `<section class="trc"><div><span>${isT ? "Allenamento di oggi" : "Allenamento"}</span><b>${esc(dT.allenamento)}</b></div>${ts.km || ts.mn || ts.kc ? `<div class="trn">${ts.km ? `<b>${cu(ts.km, 1)} km</b>` : ""}${ts.mn ? `<em>${cu(Math.round(ts.mn))} min</em>` : ""}${ts.kc ? `<em>${fmt(ts.kc)} kcal</em>` : ""}</div>` : ""}</section>`;
   }
-  if (F.some((f) => f[0] !== "allenamento" && dT[f[0]])) h += `<section class="c oggi"><h3>Oggi</h3>${dayBody(td, false, ["allenamento"])}</section>`;
-  h += weekHome(td);
+  if (F.some((f) => f[0] !== "allenamento" && dT[f[0]])) h += `<section class="c oggi"><h3>${isT ? "Oggi" : lbl(day).replace(/^./, (c) => c.toUpperCase())}</h3>${dayBody(day, false, ["allenamento"])}</section>`;
+  h += weekHome(day);
   if (!ks.length) return `<div class="c wel"><h3>Benvenuto nel tuo diario</h3><p>Per ritrovare i tuoi dati tocca l’ingranaggio in alto e poi <b>Importa dati</b>, scegliendo il file del backup.</p><p class="mu">Oppure inizia da zero: aggiungi i pasti di oggi e compila “I miei dati” in Grafici.</p><button class="b" onclick="openSet()">Importa dati</button></div>` + h;
   const ys = {};
   ks.forEach((k) => {
